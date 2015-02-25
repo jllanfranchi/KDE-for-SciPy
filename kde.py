@@ -8,10 +8,19 @@ Based on the implementation in Matlab by Zdravko Botev.
 
 Daniel B. Smith, PhD
 Updated 1-23-2013
+
+Further modified by J. L. Lanfranchi
+2015-02-24: Faster via quad -> double precision, more numpy vectorized
+  functions, numexpr for a couple of the slower evaluations. Note that the
+  double precision may make this fail in some circumstances, but I haven't seen
+  it do so yet. Regardless, modifying the calls to float64 -> float128 and
+  eliminating the numexpr calls (only supports doubles) should make it
+  equivalent to the original implementation.
 """
 
 from __future__ import division
 
+import numexpr
 import numpy as np
 import scipy.optimize
 import scipy.fftpack
