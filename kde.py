@@ -47,7 +47,7 @@ from scipy.interpolate import interp1d
 from numba import vectorize, double, f4, f8
 from numba import jit, autojit, njit
 
-print 'fast numpy?', np.use_fastnumpy
+#print 'fast numpy?', np.use_fastnumpy
 #mkl.set_num_threads(mkl.get_max_threads())
 mkl.set_num_threads(1)
 
@@ -55,7 +55,7 @@ numexpr.set_num_threads(1)
 numexpr.set_vml_accuracy_mode('fast')
 #numexpr.set_vml_num_threads(mkl.get_max_threads())
 numexpr.set_vml_num_threads(1)
-print numexpr.get_vml_version()
+#print numexpr.get_vml_version()
 
 pi = np.pi
 sqrtpi = np.sqrt(pi)
@@ -171,7 +171,63 @@ def kde(data, N=None, MIN=None, MAX=None, overfit_factor=1.0):
 
 
 #@profile
-def vbw_kde(data, N=None, MIN=None, MAX=None, overfit_factor=1.0):
+def vbw_kde(data, N=None, MIN=None, MAX=None, calc_on_mesh=True, overfit_factor=1.0):
+    '''
+    Parameters
+    ----------
+    data            The data points for which the density estimate is sought
+    
+    N               Number of points with which to form regular mesh, from MIN
+                      to MAX; this is DCT'd, so N should be a power-of-two.
+                      -> Default: 2**14 (16384)
+    
+    MIN             Minimum of range over which to compute density.
+                      -> Default: min(data) - range(data)/10
+    
+    MAX             Maximum of range over which to compute density>
+                      -> Default: max(data) + range(data)/10
+    
+    calc_on_mesh    Whether to evaluate the actual density estimates at the
+                      mesh points. This can be "false" if only the gaussians'
+                      bandwidths are desired (evaluating the density on the
+                      mesh is a large fraction of total execution time).
+                      -> Default: True
+    
+    overfit_factor  EXPERIMENTAL: For the first part of the algorithm, the
+                      improved-Sheather-Jones fixed-bandwidth (ISJ-FBW) bit,
+                      the density can be overfit by specifying overfit_factor >
+                      1.0 and underfit using a value < 1.0.                      -> Default: 1.0
+    
+    
+    Returns
+    -------
+    kernel_bandwidths The gaussian bandwidths, one for each data point 
+    
+    mesh              Locations of the mesh points
+    
+    vbw_dens_est      Density estimates at the mesh points
+    
+    
+    Notes
+    -----
+    Specifying the data range:
+        The specification of MIN and MAX are critical for obtaining a
+    reasonable density estimates. If the true underlying density slowly decays
+    to zero on one side or the other, like a gaussian, specifying too-small a
+    range will distort the edge the VBW-KDE finds. On the other hand, an abrupt
+    cut-off in the distribution should be accompanied by a similar cutoff in
+    the computational range (MIN and/or MAX). The algorithm here will
+    approximate such a sharp cut-off with roughly the same performance to the
+    reflection method for standard KDE's (as the fixed-BW portion uses a DCT of
+    the data), but note that this will not perform as well as polynomial-edges
+    or other modifications that have been proposed in the literature.
+
+    The overfit_factor and other tweaks:
+        I've seen no improvement by chaning this parameter, but it remains for
+    experimental purposes. Other avenues to expore include changing the
+    "normalization" of the variable-bandwidth bit to have a bandwidth at the
+    peak matching that found by the ISJ-FBW part 
+    '''
     
     # Parameters to set up the mesh on which to calculate
     if N is None:
@@ -223,50 +279,56 @@ def vbw_kde(data, N=None, MIN=None, MAX=None, overfit_factor=1.0):
     SmDCTData = DCTData*np.exp(-np.arange(N)**2*pisq*t_star/(2*overfit_factor))
     
     # Inverse DCT to get density
-    density = scipy.fftpack.idct(SmDCTData, norm=None)*N/R
+    fbw_dens_on_mesh = scipy.fftpack.idct(SmDCTData, norm=None)*N/R
     
     # Start by defining the mesh as the bins' centers
     mesh = (bins[0:-1]+bins[1:])/2.
     # But add the lower and upper edges in case data points live there
-    density = density/np.trapz(density, mesh)
-    bandwidth = np.sqrt(t_star)*R
+    fbw_dens_on_mesh = fbw_dens_on_mesh/np.trapz(fbw_dens_on_mesh, mesh)
+    isj_bandwidth = np.sqrt(t_star)*R
     
     # Create linear interpolator for this new density then find density est. at
-    # the original data points' locations; call this f_hat
-    interp = interp1d(x=mesh, y=density,
+    # the original data points' locations; call this fbw_dens_at_datapoints
+    interp = interp1d(x=mesh, y=fbw_dens_on_mesh,
                       kind='linear',
                       copy=False,
                       bounds_error=True,
                       fill_value=np.nan,
                       assume_sorted=True) 
-    f_hat = interp(data)
+    fbw_dens_at_datapoints = interp(data)
     
-    # Note below diverges from the published method, by forcing the bandwidth
-    # at the max of the density distribution to be exactly the bandwidth found
-    # above with the improved SHeather-Jones BW selection technique
-    # Ref: P. Hall, T. C. Hu, J. S. Marron, Improved Variable Window Kernel
-    # Estimates of Probability Densities, Annals of Statistics Vol. 23, No. 1,
-    # 1-10, 1995
-    root_f_hat = np.sqrt(f_hat/np.max(f_hat))
-    #root_f_hat = np.sqrt(f_hat) #/np.max(f_hat))
-    h = bandwidth/root_f_hat
-    #f = np.zeros_like(mesh)
+    # Note below diverges from the published Ambramson method, by forcing the
+    # bandwidth at the max of the density distribution to be exactly the
+    # bandwidth found above with the improved Sheather-Jones BW selection
+    # technique. Refs:
+    #   I.S. Abramson, On bandwidth variation in kernel estimates - A square
+    #       root law, Annals of Stat. Vol. 10, No. 4, 1217-1223 1982
+    #   P. Hall, T. C. Hu, J. S. Marron, Improved Variable Window Kernel
+    #       Estimates of Probability Densities, Annals of Statistics Vol. 23,
+    #       No. 1, 1-10, 1995
+    root_pknorm_fbw_dens_est = np.sqrt(fbw_dens_at_datapoints/np.max(fbw_dens_at_datapoints))
+    #root_fbw_dens_est = np.sqrt(fbw_dens_at_datapoints)
+    kernel_bandwidths = isj_bandwidth/root_pknorm_fbw_dens_est
+
+    if not calc_on_mesh:
+        return kernel_bandwidths, mesh, None
+    #vbw_dens_est = np.zeros_like(mesh)
     #for n, Xi in enumerate(data):
-    #    f += root_f_hat[n] * gaussian(x=mesh, mu=Xi, sigma=h[n])
-    f = np.zeros_like(mesh)
-    gaussians(f=f, x=mesh, mu=data, sigma=h)
-    f /= len(data)
+    #    vbw_dens_est += root_pknorm_fbw_dens_est[n] * gaussian(x=mesh, mu=Xi, sigma=h[n])
+    vbw_dens_est = np.zeros_like(mesh)
+    gaussians(f=vbw_dens_est, x=mesh, mu=data, sigma=kernel_bandwidths)
+    vbw_dens_est /= len(data)
     
-    f = f/np.trapz(y=f, x=mesh)
+    vbw_dens_est = vbw_dens_est/np.trapz(y=vbw_dens_est, x=mesh)
     
-    return bandwidth, mesh, f
+    return kernel_bandwidths, mesh, vbw_dens_est
 
 
 #@profile
 def fixed_point(t, M, I, a2):
     l=7
     x0 = numexpr.evaluate('I**l')
-    x1 = numexpr.evaluate('exp(-I*pisq*t)') #np.exp(-I*pisq*t)
+    x1 = numexpr.evaluate('exp(-I*pisq*t)')
     x2 = x0 * a2 * x1
     x3 = np.sum(x2)
     f = 2*pisq**l * x3
