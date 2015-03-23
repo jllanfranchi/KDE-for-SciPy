@@ -1,3 +1,5 @@
+#!/usr/bin/env python
+
 """
 An implementation of the kde bandwidth selection method outlined in:
 
@@ -148,10 +150,10 @@ def kde(data, N=None, MIN=None, MAX=None, overfit_factor=1.0):
             break
         except ValueError:
             failure = True
-
+    
     if failure:
         raise ValueError('Initial root-finding failed.')
-
+    
     # Smooth the DCTransformed data using t_star divided by an overfitting
     # param that allows sub-optimal but allows for "sharper" features
     SmDCTData = DCTData*np.exp(-np.arange(N)**2*pisq*t_star/(2*overfit_factor))
@@ -164,12 +166,12 @@ def kde(data, N=None, MIN=None, MAX=None, overfit_factor=1.0):
     bandwidth = np.sqrt(t_star)*R
     
     density = density/np.trapz(density, mesh)
-
+    
     return bandwidth, mesh, density
 
 
 #@profile
-def vbw_kde(data, N=None, MIN=None, MAX=None, overfit_factor=0.01):
+def vbw_kde(data, N=None, MIN=None, MAX=None, overfit_factor=1.0):
     
     # Parameters to set up the mesh on which to calculate
     if N is None:
@@ -178,6 +180,8 @@ def vbw_kde(data, N=None, MIN=None, MAX=None, overfit_factor=0.01):
         minimum = min(data)
         maximum = max(data)
         Range = maximum - minimum
+        if Range == 0:
+            warnings.warn('Range of data is 0; there are ' + str(len(data)) + ' datapoints.')
         MIN = minimum - Range/10 if MIN is None else MIN
         MAX = maximum + Range/10 if MAX is None else MAX
     
@@ -221,7 +225,9 @@ def vbw_kde(data, N=None, MIN=None, MAX=None, overfit_factor=0.01):
     # Inverse DCT to get density
     density = scipy.fftpack.idct(SmDCTData, norm=None)*N/R
     
+    # Start by defining the mesh as the bins' centers
     mesh = (bins[0:-1]+bins[1:])/2.
+    # But add the lower and upper edges in case data points live there
     density = density/np.trapz(density, mesh)
     bandwidth = np.sqrt(t_star)*R
     
