@@ -46,6 +46,7 @@ from scipy.stats import gaussian_kde, norm
 from scipy.interpolate import interp1d
 from numba import vectorize, double, f4, f8
 from numba import jit, autojit, njit
+import gaussians as GAUS
 
 #print 'fast numpy?', np.use_fastnumpy
 #mkl.set_num_threads(mkl.get_max_threads())
@@ -324,7 +325,7 @@ def vbw_kde(data, N=None, MIN=None, MAX=None, evaluate_dens=True, evaluate_at=No
     if not evaluate_dens:
         return kernel_bandwidths, evaluate_at, None
     vbw_dens_est = np.zeros_like(evaluate_at)
-    gaussians(f=vbw_dens_est, x=evaluate_at, mu=data, sigma=kernel_bandwidths)
+    GAUS.gaussians(outbuf=vbw_dens_est, x=evaluate_at, mu=data, sigma=kernel_bandwidths)
     vbw_dens_est /= len(data)
     
     vbw_dens_est = vbw_dens_est/np.trapz(y=vbw_dens_est, x=evaluate_at)
@@ -357,12 +358,13 @@ def fixed_point(t, M, I, a2):
 def speedTest():
     import os
     import cPickle
-    with file(os.path.join(os.path.expanduser('~'), 'cowen', 'quality_of_fit', 'code', 'test_diffuskde_speed', 'data.pkl'), 'rb') as F:
+    with file('test_cython/data.pkl', 'rb') as F:
         enuerr = cPickle.load(F)
     min_e = min(enuerr)
     max_e = max(enuerr)
     ran_e = max_e - min_e
-    vbw_kde(data=enuerr, N=2**12, MIN=min_e-ran_e/2., MAX=max_e+ran_e/2, overfit_factor=1.00)
+    for n in xrange(100):
+        vbw_kde(data=enuerr, N=2**12, MIN=min_e-ran_e/2., MAX=max_e+ran_e/2, overfit_factor=1.00)
 
 
 if __name__ == "__main__":
