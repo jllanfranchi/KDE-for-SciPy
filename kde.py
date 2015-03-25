@@ -86,8 +86,8 @@ def gaussian(x, mu, sigma):
     twosigma2 = 2*sigma**2 #numexpr.evaluate('2*sigma**2')
     #invsqrt2pisigma = 
     sqrt2pisigma = sqrt2pi * sigma
-    X = -(x - mu)**2 / twosigma2
-    return numexpr.evaluate('exp(X)') / sqrt2pisigma
+    x1 = -(x - mu)**2 / twosigma2
+    return numexpr.evaluate('exp(x1)') / sqrt2pisigma
 
 #@profile
 #@jit(f8[:](f8[:], f8[:], f8[:]))
@@ -109,7 +109,6 @@ def gaussians(f, x, mu, sigma):
 
 
 def kde(data, N=None, MIN=None, MAX=None, overfit_factor=1.0):
-    
     # Parameters to set up the mesh on which to calculate
     N = 2**14 if N is None else int(2**np.ceil(np.log2(N)))
     if MIN is None or MAX is None:
@@ -171,14 +170,14 @@ def kde(data, N=None, MIN=None, MAX=None, overfit_factor=1.0):
 
 
 #@profile
-def vbw_kde(data, N=None, MIN=None, MAX=None, calc_on_mesh=True, overfit_factor=1.0):
+def vbw_kde(data, N=None, MIN=None, MAX=None, evaluate_dens=True, evaluate_at=None, overfit_factor=1.0):
     '''
     Parameters
     ----------
     data            The data points for which the density estimate is sought
     
     N               Number of points with which to form regular mesh, from MIN
-                      to MAX; this is DCT'd, so N should be a power-of-two.
+                      to MAX; this gets DCT'd, so N should be a power of two.
                       -> Default: 2**14 (16384)
     
     MIN             Minimum of range over which to compute density.
@@ -187,32 +186,41 @@ def vbw_kde(data, N=None, MIN=None, MAX=None, calc_on_mesh=True, overfit_factor=
     MAX             Maximum of range over which to compute density>
                       -> Default: max(data) + range(data)/10
     
-    calc_on_mesh    Whether to evaluate the actual density estimates at the
-                      mesh points. This can be "false" if only the gaussians'
-                      bandwidths are desired (evaluating the density on the
-                      mesh is a large fraction of total execution time).
+    evaluate_dens   Whether to evaluate the density either at the mesh points
+                      defined by N, MIN, and MAX, or at the points specified by
+                      the argument evaluate_at. If False, only the gaussians'
+                      bandwidths and the mesh locations (no density) are
+                      returned. Evaluating the density is a large fraction of
+                      total execution time, so setting this to False saves time
+                      if only the bandwidths are desired.
                       -> Default: True
+    
+    evaluate_at     Points at which to evaluate the density. If None is
+                      specified, evaluates at points on the mesh defined by
+                      MIN, MAX, and N.
+                      -> Default: None
     
     overfit_factor  EXPERIMENTAL: For the first part of the algorithm, the
                       improved-Sheather-Jones fixed-bandwidth (ISJ-FBW) bit,
                       the density can be overfit by specifying overfit_factor >
-                      1.0 and underfit using a value < 1.0.                      -> Default: 1.0
-    
+                      1.0 and underfit using a value < 1.0.
+                      -> Default: 1.0
     
     Returns
     -------
     kernel_bandwidths The gaussian bandwidths, one for each data point 
     
-    mesh              Locations of the mesh points
+    evaluate_at       Locations at which the density is evaluated
     
-    vbw_dens_est      Density estimates at the mesh points
-    
+    vbw_dens_est      Density estimates at the mesh points, or None if
+                        evaluate_dens is False
     
     Notes
     -----
-    Specifying the data range:
+    Specifying the range:
+    
         The specification of MIN and MAX are critical for obtaining a
-    reasonable density estimates. If the true underlying density slowly decays
+    reasonable density estimate. If the true underlying density slowly decays
     to zero on one side or the other, like a gaussian, specifying too-small a
     range will distort the edge the VBW-KDE finds. On the other hand, an abrupt
     cut-off in the distribution should be accompanied by a similar cutoff in
@@ -221,14 +229,14 @@ def vbw_kde(data, N=None, MIN=None, MAX=None, calc_on_mesh=True, overfit_factor=
     reflection method for standard KDE's (as the fixed-BW portion uses a DCT of
     the data), but note that this will not perform as well as polynomial-edges
     or other modifications that have been proposed in the literature.
-
-    The overfit_factor and other tweaks:
-        I've seen no improvement by chaning this parameter, but it remains for
-    experimental purposes. Other avenues to expore include changing the
-    "normalization" of the variable-bandwidth bit to have a bandwidth at the
-    peak matching that found by the ISJ-FBW part 
-    '''
     
+    overfit_factor, other tweaks:
+    
+        I've seen no improvement by changing this parameter, but it remains for
+    experimental purposes. Other avenues to explore include changing the
+    "normalization" of the variable-bandwidth bit that I use which forces it to
+    have a bandwidth at the peak matching that found by the ISJ-FBW part 
+    '''
     # Parameters to set up the mesh on which to calculate
     if N is None:
         N = 2**14 #if N is None else int(2**np.ceil(np.log2(N)))
@@ -237,11 +245,12 @@ def vbw_kde(data, N=None, MIN=None, MAX=None, calc_on_mesh=True, overfit_factor=
         maximum = max(data)
         Range = maximum - minimum
         if Range == 0:
-            warnings.warn('Range of data is 0; there are ' + str(len(data)) + ' datapoints.')
+            warnings.warn('Range of data is 0; there are ' + str(len(data)) +
+                          ' data points.')
         MIN = minimum - Range/10 if MIN is None else MIN
         MAX = maximum + Range/10 if MAX is None else MAX
     
-    # Range of the data
+    # Range for computation
     R = MAX-MIN
     
     # Histogram the data to get a crude first approximation of the density
@@ -307,21 +316,20 @@ def vbw_kde(data, N=None, MIN=None, MAX=None, calc_on_mesh=True, overfit_factor=
     #       Estimates of Probability Densities, Annals of Statistics Vol. 23,
     #       No. 1, 1-10, 1995
     root_pknorm_fbw_dens_est = np.sqrt(fbw_dens_at_datapoints/np.max(fbw_dens_at_datapoints))
-    #root_fbw_dens_est = np.sqrt(fbw_dens_at_datapoints)
     kernel_bandwidths = isj_bandwidth/root_pknorm_fbw_dens_est
-
-    if not calc_on_mesh:
-        return kernel_bandwidths, mesh, None
-    #vbw_dens_est = np.zeros_like(mesh)
-    #for n, Xi in enumerate(data):
-    #    vbw_dens_est += root_pknorm_fbw_dens_est[n] * gaussian(x=mesh, mu=Xi, sigma=h[n])
-    vbw_dens_est = np.zeros_like(mesh)
-    gaussians(f=vbw_dens_est, x=mesh, mu=data, sigma=kernel_bandwidths)
+    
+    if evaluate_at is None:
+        evaluate_at = mesh
+    
+    if not evaluate_dens:
+        return kernel_bandwidths, evaluate_at, None
+    vbw_dens_est = np.zeros_like(evaluate_at)
+    gaussians(f=vbw_dens_est, x=evaluate_at, mu=data, sigma=kernel_bandwidths)
     vbw_dens_est /= len(data)
     
-    vbw_dens_est = vbw_dens_est/np.trapz(y=vbw_dens_est, x=mesh)
+    vbw_dens_est = vbw_dens_est/np.trapz(y=vbw_dens_est, x=evaluate_at)
     
-    return kernel_bandwidths, mesh, vbw_dens_est
+    return kernel_bandwidths, evaluate_at, vbw_dens_est
 
 
 #@profile
