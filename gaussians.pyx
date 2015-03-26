@@ -45,13 +45,13 @@ def gaussians(double[::1] outbuf,
     cdef Py_ssize_t i, gaus_n
     # NOTE that the order of the loops is important, as
     # updating the outbuf is NOT thread safe!
-    for gaus_n in prange(mu.shape[0],
-                         nogil=True,
-                         num_threads=threads,
-                         schedule='static'):
-        twosigma2 = 2*(sigma[gaus_n]*sigma[gaus_n])
-        sqrt2pisigma = sqrt2pi * sigma[gaus_n]
-        for i in xrange(x.shape[0]):
+    for i in prange(x.shape[0],
+                    nogil=True,
+                    num_threads=threads,
+                    schedule='static'):
+        for gaus_n in xrange(mu.shape[0]):
+            twosigma2 = 2*(sigma[gaus_n]*sigma[gaus_n])
+            sqrt2pisigma = sqrt2pi * sigma[gaus_n]
             xlessmu = x[i]-mu[gaus_n]
             x1 = -(xlessmu*xlessmu) / twosigma2
             outbuf[i] += exp(x1) / sqrt2pisigma

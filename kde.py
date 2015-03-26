@@ -47,6 +47,10 @@ from scipy.interpolate import interp1d
 from numba import vectorize, double, f4, f8
 from numba import jit, autojit, njit
 import gaussians as GAUS
+import multiprocessing
+
+#openmp_num_threads = min(multiprocessing.cpu_count(), 8)
+openmp_num_threads = multiprocessing.cpu_count()
 
 #print 'fast numpy?', np.use_fastnumpy
 #mkl.set_num_threads(mkl.get_max_threads())
@@ -105,8 +109,8 @@ def gaussian(x, mu, sigma):
 #    return f
 
 #@profile
-def gaussians(f, x, mu, sigma):
-    [f.__iadd__(gaussian(x, mu[n], sigma[n])) for n in xrange(len(mu))]
+def gaussians(outbuf, x, mu, sigma, **kwargs):
+    [outbuf.__iadd__(gaussian(x, mu[n], sigma[n])) for n in xrange(len(mu))]
 
 
 def kde(data, N=None, MIN=None, MAX=None, overfit_factor=1.0):
@@ -325,7 +329,13 @@ def vbw_kde(data, N=None, MIN=None, MAX=None, evaluate_dens=True, evaluate_at=No
     if not evaluate_dens:
         return kernel_bandwidths, evaluate_at, None
     vbw_dens_est = np.zeros_like(evaluate_at)
-    GAUS.gaussians(outbuf=vbw_dens_est, x=evaluate_at, mu=data, sigma=kernel_bandwidths)
+    GAUS.gaussians(
+        outbuf  = vbw_dens_est,
+        x       = evaluate_at,
+        mu      = data,
+        sigma   = kernel_bandwidths,
+        threads = openmp_num_threads
+    )
     vbw_dens_est /= len(data)
     
     vbw_dens_est = vbw_dens_est/np.trapz(y=vbw_dens_est, x=evaluate_at)

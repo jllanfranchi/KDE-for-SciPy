@@ -1,3 +1,7 @@
 *.pdf
 *.pyc
 *~
+*.c
+*.so
+*.o
+build/
